@@ -5,10 +5,7 @@
   "display": "standalone",
   "background_color": "#fffaf0",
   "theme_color": "#2962ff",
-  "description": "Notesphere is your personal cloud for notes, photos, homework pages and study materials.
-Upload, organise and instantly share your notes using smart short codes — no link copying, no sign-in headaches. Just snap, upload, and access your notes anytime.
-
-Designed for students, teachers, and creators, Notesphere makes note-dumping extremely simple.",
+  "description": "Notesphere is your personal cloud for notes, photos, homework pages and study materials.\nUpload, organise and instantly share your notes using smart short codes — no link copying, no sign-in headaches. Just snap, upload, and access your notes anytime.\n\nDesigned for students, teachers, and creators, Notesphere makes note-dumping extremely simple.",
   "icons": [
     {
       "src": "92.png",
