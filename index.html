@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2962ff">
+
+<!-- PWA icons -->
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📸 Notesphere (Cloudinary + Firestore)</title>
+<link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap" rel="stylesheet"/>
+<style>
+body { font-family:'Patrick Hand', cursive; background:#fffaf0; padding:20px; }
+.container{ max-width:900px; margin:auto; }
+header{ display:flex; justify-content:space-between; align-items:center; }
+header h1{ color:#2962ff; font-size:2.5rem; }
+button,input{ font-family:'Patrick Hand', cursive; font-size:1rem; padding:10px; border-radius:8px; border:2px solid #222; }
+button{ background:#2962ff; color:white; cursor:pointer; }
+#logout-btn{ background:#d50000; }
+.hidden{ display:none; }
+.card{ background:#ffffa0; padding:15px; border:1px solid #ccc; margin:10px 0; }
+.card img{ max-width:100%; margin-top:10px; border:1px solid #333; }
+#notes-list{ display:grid; gap:20px; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); margin-top:20px; }
+.card button{ margin-top:5px; padding:5px 8px; font-size:0.9rem; }
+/* Full screen image viewer */
+#fullscreen-viewer {
+  position: fixed;
+  top:0; left:0;
+  width:100%;
+  height:100%;
+  background: rgba(0,0,0,0.9);
+  display:none;
+  justify-content:center;
+  align-items:center;
+  z-index: 9999;
+}
+
+#fullscreen-viewer img {
+  width:90%;
+  max-height:90%;
+  object-fit:contain;
+  border-radius:10px;
+  border:2px solid #fff;
+  box-shadow:0 0 20px #000;
+  user-select:none;
+}
+    </style>
+</head>
+<body>
+<div class="container">
+<header>
+<h1>📸 Notesphere</h1>
+<div>
+  <div id="login-view"><button id="login-btn">Login with Google</button></div>
+  <div id="user-view" class="hidden">
+    <span id="user-info"></span>
+    <button id="logout-btn">Logout</button>
+  </div>
+</div>
+</header>
+
+<main id="main" class="hidden">
+<hr>
+<h3>🔍 Search by Code</h3>
+<input type="text" id="search-query" placeholder="e.g. ABC123">
+<button id="search-btn">Search</button>
+<div id="search-result"></div>
+<hr>
+<h3>📤 Upload New Image</h3>
+<input type="text" id="subject" placeholder="Subject (e.g. Math)">
+<input type="file" id="image-file" accept="image/*">
+<button id="upload-btn">Upload</button>
+<div id="upload-status"></div>
+<hr>
+<h3>📝 My Uploaded Notes</h3>
+<div id="notes-list"></div>
+</main>
+</div>
+<div id="fullscreen-viewer" onclick="closeFullView()">
+  <img id="full-view-img">
+</div>
+    <button onclick="downloadAllAsPDF()">📄 Download All as PDF</button>
+<!-- Cloudinary widget library (keeps widget available if you prefer widget later) -->
+<script src="https://upload-widget.cloudinary.com/global/all.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, collection, addDoc, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+// ====== Firebase Setup (metadata only) ======
+const firebaseConfig = {
+  apiKey: "AIzaSyC9rehsf-0jkb9dAeT1-0Z1C-yRJ0YI9dA",
+  authDomain: "gymnm-ce84b.firebaseapp.com",
+  projectId: "gymnm-ce84b",
+  storageBucket: "gymnm-ce84b.appspot.com",
+  messagingSenderId: "474926929394",
+  appId: "1:474926929394:web:6abdb807caba2751a5c76b"
+};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth();
+const db = getFirestore(app);
+
+// ====== UI elements ======
+const loginBtn = document.getElementById("login-btn");
+const logoutBtn = document.getElementById("logout-btn");
+const loginView = document.getElementById("login-view");
+const userView = document.getElementById("user-view");
+const userInfo = document.getElementById("user-info");
+const main = document.getElementById("main");
+const uploadStatus = document.getElementById("upload-status");
+const notesList = document.getElementById("notes-list");
+const searchBtn = document.getElementById("search-btn");
+const searchQuery = document.getElementById("search-query");
+const searchResult = document.getElementById("search-result");
+
+loginBtn.onclick = () => signInWithPopup(auth, new GoogleAuthProvider());
+logoutBtn.onclick = () => signOut(auth);
+
+let currentUser = null;
+onAuthStateChanged(auth, user => {
+  if (user) {
+    currentUser = user;
+    loginView.classList.add("hidden");
+    userView.classList.remove("hidden");
+    main.classList.remove("hidden");
+    userInfo.textContent = `Hello, ${user.displayName}`;
+    loadUserNotes();
+  } else {
+    currentUser = null;
+    loginView.classList.remove("hidden");
+    userView.classList.add("hidden");
+    main.classList.add("hidden");
+  }
+});
+
+// ====== helpers ======
+function generateShortCode(length=6){
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let code = "";
+  for(let i=0;i<length;i++) code += chars.charAt(Math.floor(Math.random()*chars.length));
+  return code;
+}
+
+// ====== Cloudinary settings (replace CLOUD_NAME when ready) ======
+const CLOUD_NAME = "diaeslfak"; // <-- replace this with your cloud name
+const UPLOAD_PRESET = "notes_upload";      // preset you created
+
+// Optional: pre-create widget (not required—code below uses fetch upload)
+const widget = cloudinary.createUploadWidget({
+  cloudName: CLOUD_NAME,
+  uploadPreset: UPLOAD_PRESET,
+  folder: "notesphere"
+}, (err, result) => {
+  // no-op; widget available if you want to open it manually
+});
+
+// ====== Upload image (direct POST to Cloudinary, then metadata to Firestore) ======
+document.getElementById("upload-btn").onclick = async function(){
+  const subject = document.getElementById("subject").value.trim();
+  const file = document.getElementById("image-file").files[0];
+  if(!subject || !file) return alert("Enter subject & select file.");
+  uploadStatus.textContent = "Uploading...";
+  const shortCode = generateShortCode();
+
+  try {
+    // upload to Cloudinary (original quality)
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("upload_preset", UPLOAD_PRESET);
+    fd.append("folder", "notesphere");
+    // attach custom metadata as context (optional)
+    fd.append("context", `subject=${subject}|uploader=${currentUser.email}`);
+
+    const cloudUrl = `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`;
+    const res = await fetch(cloudUrl, { method: "POST", body: fd });
+    const result = await res.json();
+
+    if (!result || !result.secure_url) {
+      console.error("Cloudinary error:", result);
+      uploadStatus.textContent = "❌ Upload failed (Cloudinary). Check console.";
+      return;
+    }
+
+    const imageUrl = result.secure_url;
+
+    // store only metadata in Firestore
+    await addDoc(collection(db, "notes"), {
+      uploaderId: currentUser.uid,
+      uploaderEmail: currentUser.email || null,
+      subject,
+      imageUrl,
+      shortCode,
+      publicId: result.public_id || null,
+      createdAt: serverTimestamp()
+    });
+
+    uploadStatus.textContent = `Uploaded! Code: ${shortCode}`;
+    // refresh list
+    loadUserNotes();
+
+  } catch (e) {
+    console.error(e);
+    uploadStatus.textContent = "❌ Upload failed: " + (e.message || e);
+  }
+};
+
+// ====== Load user's notes (reads Firestore metadata, images served from Cloudinary) ======
+async function loadUserNotes(){
+  const q = query(collection(db, "notes"), where("uploaderId","==", currentUser.uid));
+  const snap = await getDocs(q);
+  notesList.innerHTML = "";
+  snap.forEach(doc => {
+    const d = doc.data();
+    const div = document.createElement("div");
+    div.className = "card";
+    div.innerHTML = `
+      <strong>${d.subject}</strong><br>
+      Code: <code>${d.shortCode}</code><br>
+      <img src="${d.imageUrl}" onclick="openFullView('${d.imageUrl}')">
+      <button onclick="copyCode('${d.shortCode}')">Copy Code</button>
+      <button onclick="downloadImage('${d.imageUrl}')">Download</button>
+    `;
+    notesList.appendChild(div);
+  });
+}
+
+// ====== Search by code (search Firestore metadata) ======
+searchBtn.onclick = async function(){
+  const q = searchQuery.value.trim().toUpperCase();
+  if(!q) return;
+  const snap = await getDocs(query(collection(db,"notes"), where("shortCode","==", q)));
+  if(snap.empty){ searchResult.innerHTML = "<p>No image found.</p>"; return; }
+  const d = snap.docs[0].data();
+  searchResult.innerHTML = `
+    <div class="card">
+      <strong>${d.subject}</strong><br>
+      Code: <code>${d.shortCode}</code><br>
+      <img src="${d.imageUrl}"><br>
+      <button onclick="copyCode('${d.shortCode}')">Copy Code</button>
+      <button onclick="downloadImage('${d.imageUrl}')">Download</button>
+    </div>
+  `;
+};
+
+// ====== Utilities ======
+window.copyCode = function(code){
+  navigator.clipboard.writeText(code).then(()=> alert("Code copied!"));
+};
+window.downloadImage = function(url){
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "notes-image";
+  a.click();
+};
+    // ========== FULLSCREEN VIEWER ==========
+window.openFullView = function(url){
+  document.getElementById("full-view-img").src = url;
+  document.getElementById("fullscreen-viewer").style.display = "flex";
+};
+
+window.closeFullView = function(){
+  document.getElementById("fullscreen-viewer").style.display = "none";
+};
+
+
+// ========== DOWNLOAD ALL AS PDF ==========
+window.downloadAllAsPDF = async function(){
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF();
+
+  const q = query(collection(db, "notes"), where("uploaderId", "==", currentUser.uid));
+  const snap = await getDocs(q);
+
+  let index = 0;
+
+  for (const docSnap of snap.docs) {
+    const d = docSnap.data();
+    const imgUrl = d.imageUrl;
+    const imgData = await fetch(imgUrl).then(res => res.blob())
+      .then(blob => new Promise(resolve => {
+        const r = new FileReader();
+        r.onloadend = () => resolve(r.result);
+        r.readAsDataURL(blob);
+      }));
+
+    if(index !== 0) pdf.addPage();
+    pdf.addImage(imgData, "JPEG", 10, 10, 190, 260);
+    index++;
+  }
+
+  pdf.save("Notesphere_All_Images.pdf");
+};
+</script>
+  <script>
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("service-worker.js");
+}
+  </script>
+</body>
+  </html>
